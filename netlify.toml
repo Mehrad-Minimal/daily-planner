@@ -1,0 +1,12 @@
+[build]
+  publish = "public"
+
+[build.environment]
+  # config.js holds only the public Supabase URL and publishable key.
+  SECRETS_SCAN_OMIT_PATHS = "config.js"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
