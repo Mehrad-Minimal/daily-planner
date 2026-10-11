@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A minimal, iOS-style daily planner.">
 <title>Daily Planner</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
@@ -30,7 +32,7 @@ ul{list-style:none;margin:0;padding:0}
 #go{width:auto;padding:0 13px;border-radius:16px;color:var(--blue);font-size:14px;font-weight:600;opacity:0;transform:scale(.8);pointer-events:none;transition:.4s cubic-bezier(.34,1.56,.64,1)}
 #go.on{opacity:1;transform:none;pointer-events:auto}
 h1{font-size:34px;line-height:1.1;letter-spacing:-.02em;margin:2px 0 18px;font-weight:700}
-h1.sw{animation:up .55s cubic-bezier(.2,.8,.2,1)}
+h1.fx{animation:up .55s cubic-bezier(.2,.8,.2,1)}
 .week{position:relative;display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:18px}
 .pill{position:absolute;inset:0 auto 0 0;width:calc(100%/7);transform:translateX(calc(var(--i,0)*100%));transition:transform .6s cubic-bezier(.34,1.35,.64,1)}
 .pill:before{content:"";position:absolute;inset:0 3px;border-radius:18px;background:var(--blue);box-shadow:0 8px 18px color-mix(in srgb,var(--blue) 38%,transparent)}
@@ -103,6 +105,10 @@ input[type=time]{border:0;outline:0;background:var(--fill);color:inherit;font:in
 .sw button{width:26px;height:26px;border-radius:50%;background:var(--c);transition:transform .45s cubic-bezier(.34,1.56,.64,1),box-shadow .3s}
 .sw button.on{transform:scale(1.18);box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--c)}
 body.boot .app,body.boot .fab,body.boot #auth,body:not(.authed) .app,body:not(.authed) .fab,body.authed #auth{display:none}
+[hidden]{display:none!important}
+body.recovering #auth{display:grid}
+body.recovering .app,body.recovering .fab{display:none}
+.link{display:block;margin:14px auto 0;color:var(--blue);font-size:15px;font-weight:500}
 #auth{min-height:100vh;display:grid;place-items:center;padding:24px 20px}
 .acard{width:100%;max-width:380px;text-align:center;animation:up .8s cubic-bezier(.2,.8,.2,1) backwards}
 .logo{width:76px;height:76px;margin:0 auto 18px;border-radius:22px;background:var(--blue);display:grid;place-items:center;box-shadow:0 14px 30px color-mix(in srgb,var(--blue) 40%,transparent)}
@@ -133,13 +139,14 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-o
 <body class="boot">
 <section id="auth"><div class="acard">
   <div class="logo"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="3.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></div>
-  <h1>Daily Planner</h1><p>Sign in to keep your plans in sync.</p>
+  <h1>Daily Planner</h1><p id="asub">Sign in to keep your plans in sync.</p>
   <div class="seg" id="aseg" style="--n:2"><i></i><button class="on" type="button">Sign in</button><button type="button">Create account</button></div>
   <form id="aform">
-    <div class="grp"><input id="em" type="email" placeholder="Email" autocomplete="email" required><input id="pw" type="password" placeholder="Password (8+ characters)" autocomplete="current-password" minlength="8" required></div>
+    <div class="grp"><input id="em" type="email" placeholder="Email" autocomplete="email" required><input id="pw" type="password" placeholder="Password" autocomplete="current-password" required></div>
     <p class="msg" id="msg"></p>
     <button class="btn" id="abtn">Sign in</button>
   </form>
+  <button class="link" id="forgot" type="button">Forgot password?</button>
 </div></section>
 <div class="nav" id="nav">Today</div>
 <main class="app">
@@ -167,49 +174,65 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-o
 <div class="sheet" id="sheet" role="dialog" aria-label="New task">
   <div class="grab"></div>
   <div class="shh"><button id="cancel">Cancel</button><span>New task</span><button id="add" disabled>Add</button></div>
-  <div class="grp"><input id="inp" placeholder="What's the plan?" maxlength="80" autocomplete="off"></div>
-  <div class="grp"><div>Time<input type="time" id="time"></div><div>Color<span class="sw" id="sw"></span></div></div>
+  <div class="grp"><input id="inp" placeholder="What's the plan?" maxlength="80" autocomplete="off" aria-label="Task"></div>
+  <div class="grp"><div>Time<input type="time" id="time" aria-label="Time"></div><div>Color<span class="sw" id="sw"></span></div></div>
 </div>
 <div class="sheet" id="acct" role="dialog" aria-label="Account"><div class="grab"></div><p class="who" id="who"></p><div class="grp"><button class="out-btn danger" id="out">Sign out</button></div><div class="grp"><button class="out-btn" id="acx" style="color:var(--blue)">Cancel</button></div></div>
 <div class="toast" id="toast"></div>
 <script>
 const $=s=>document.querySelector(s),C=163.36;
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-let user=null,cache={},loaded=new Set(),pending=new Set();
+const configured=typeof SUPABASE_URL!=='undefined'&&typeof SUPABASE_KEY!=='undefined'&&typeof supabase!=='undefined';
+const sb=configured?supabase.createClient(SUPABASE_URL,SUPABASE_KEY):null;
+let user=null,cache={},loaded=new Set(),pending=new Set(),recovering=false;
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('on'),3200)};
 const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
-const weekOf=d=>addDays(d,-(d.getDay()+6)%7);
+const weekOf=d=>addDays(d,-((d.getDay()+6)%7));
 const key=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-const today=new Date();today.setHours(0,0,0,0);
+const startOfDay=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
+let today=startOfDay();
 let sel=new Date(today),filter=0,color='blue',wk='';
 const day=()=>cache[key(sel)]||(cache[key(sel)]=[]);
 const fmt=t=>{const[h,m]=t.split(':'),H=+h;return(H%12||12)+':'+m+' '+(H<12?'AM':'PM')};
 
+// Rolls the "Today" anchor forward when the calendar day changes (app left open overnight).
+function refreshToday(){
+  const now=startOfDay();
+  if(key(now)===key(today))return;
+  const wasToday=key(sel)===key(today);
+  today=now;
+  if(wasToday)sel=new Date(now);
+  wk='';
+  renderAll(0);
+}
+
 function renderHead(){
   const diff=Math.round((sel-today)/864e5);
   const t=diff==0?'Today':diff==1?'Tomorrow':diff==-1?'Yesterday':sel.toLocaleDateString('en',{weekday:'long'});
-  const h=$('#title');if(h.textContent!==t){h.textContent=t;h.classList.remove('sw');void h.offsetWidth;h.classList.add('sw')}
+  const h=$('#title');if(h.textContent!==t){h.textContent=t;h.classList.remove('fx');void h.offsetWidth;h.classList.add('fx')}
   $('#nav').textContent=t;
   $('#sub').textContent=sel.toLocaleDateString('en',{month:'long',day:'numeric',year:'numeric'});
   $('#go').classList.toggle('on',key(sel)!=key(today));
 }
 function renderWeek(){
-  const s=new Date(sel);s.setDate(s.getDate()-(s.getDay()+6)%7);
-  const el=$('#week'),k=key(s);
+  const s=weekOf(sel),el=$('#week'),k=key(s);
   el.style.setProperty('--i',(sel.getDay()+6)%7);
   if(wk!==k){
     const first=!wk;wk=k;el.innerHTML='<i class="pill"></i>';
     for(let i=0;i<7;i++){
-      const d=new Date(s);d.setDate(s.getDate()+i);
+      const d=addDays(s,i);
       const b=document.createElement('button');
+      b.type='button';
       b.className='day'+(key(d)==key(today)?' today':'');b.dataset.k=key(d);b.style.animationDelay=i*30+'ms';
+      b.setAttribute('aria-label',d.toLocaleDateString('en',{weekday:'long',month:'long',day:'numeric'}));
       b.innerHTML='<span>'+d.toLocaleDateString('en',{weekday:'short'}).slice(0,3)+'</span><b>'+d.getDate()+'</b><u></u>';
       b.onclick=()=>{sel=new Date(d);renderAll(1)};
       el.append(b)}
     el.classList.remove('swap');if(!first){void el.offsetWidth;el.classList.add('swap')}
   }
   el.querySelectorAll('.day').forEach(b=>{
-    b.classList.toggle('sel',b.dataset.k==key(sel));
+    const on=b.dataset.k==key(sel);
+    b.classList.toggle('sel',on);b.setAttribute('aria-pressed',on);
+    if(b.dataset.k==key(today))b.setAttribute('aria-current','date');else b.removeAttribute('aria-current');
     b.querySelector('u').classList.toggle('on',(cache[b.dataset.k]||[]).length>0)});
 }
 function countTo(el,to){
@@ -226,23 +249,45 @@ function stats(){
   if(full&&!rw.classList.contains('full')){rw.classList.add('full')}else if(!full){rw.classList.remove('full')}
 }
 function collapse(e,cb){e.style.height=e.offsetHeight+'px';void e.offsetHeight;e.classList.add('out');setTimeout(()=>{e.remove();cb&&cb()},430)}
-function remove(e,id){
-  cache[key(sel)]=day().filter(x=>x.id!=id);sb.from('tasks').delete().eq('id',id).then(({error})=>{if(error){toast('Could not delete. '+error.message);loadWeek(true)}});stats();renderWeek();
-  collapse(e,()=>{if(!$('#list li'))renderList()})}
+function paint(e,t){
+  e.querySelector('.row').classList.toggle('done',t.d);
+  e.querySelector('.chk').setAttribute('aria-label',(t.d?'Mark not done: ':'Mark done: ')+t.t);
+}
+// Slides a task off-screen, then deletes it. Used by swipe and by the Delete key.
+function dismiss(e,t){
+  if(e.dataset.gone)return;e.dataset.gone='1';
+  const row=e.querySelector('.row');
+  row.style.transition='';row.style.transform='translateX(-110%)';
+  e.querySelector('.del').style.opacity=1;
+  setTimeout(()=>remove(e,t),230);
+}
+function remove(e,t){
+  cache[t.k]=(cache[t.k]||[]).filter(x=>x.id!==t.id);
+  sb.from('tasks').delete().eq('id',t.id).then(({error})=>{if(error){toast('Could not delete. '+error.message);loadWeek(true)}});
+  stats();renderWeek();
+  collapse(e,()=>{if(!$('#list li'))renderList()});
+}
 function toggle(t,e){
-  t.d=!t.d;sb.from('tasks').update({done:t.d}).eq('id',t.id).then(({error})=>{if(error){t.d=!t.d;e.querySelector('.row').classList.toggle('done',t.d);stats();toast('Could not save. '+error.message)}});
+  t.d=!t.d;
+  const want=t.d;
+  sb.from('tasks').update({done:want}).eq('id',t.id).then(({error})=>{
+    if(error){t.d=!want;paint(e,t);stats();toast('Could not save. '+error.message)}});
   const c=e.querySelector('.chk');c.classList.remove('tick');void c.offsetWidth;c.classList.add('tick');
-  e.querySelector('.row').classList.toggle('done',t.d);stats();
-  if(filter)setTimeout(()=>collapse(e,()=>{if(!$('#list li'))renderList()}),520)}
+  paint(e,t);stats();
+  // In a filtered view, drop the row after the check animation, unless the user already changed it back.
+  if(filter)setTimeout(()=>{if(t.d===want)collapse(e,()=>{if(!$('#list li'))renderList()})},520);
+}
 function li(t,i,mode){
   const e=document.createElement('li');
   e.className=mode==='stagger'?'in':mode===t.id?'in pop':'';
   e.style.setProperty('--d',mode==='stagger'?i*55+'ms':'0s');
-  e.innerHTML='<div class="del">Delete</div><div class="row c-'+t.c+(t.d?' done':'')+'"><button class="chk" aria-label="Mark done"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></button><div class="txt"><span class="t"></span>'+(t.time?'<small>'+fmt(t.time)+'</small>':'')+'</div></div>';
+  e.innerHTML='<div class="del" aria-hidden="true">Delete</div><div class="row c-'+t.c+(t.d?' done':'')+'"><button class="chk" type="button"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></button><div class="txt"><span class="t"></span>'+(t.time?'<small>'+fmt(t.time)+'</small>':'')+'</div></div>';
   e.querySelector('.t').textContent=t.t;
-  const row=e.querySelector('.row'),del=e.querySelector('.del');
+  paint(e,t);
+  const row=e.querySelector('.row'),del=e.querySelector('.del'),chk=e.querySelector('.chk');
   let sx=0,dx=0,dn=false,mv=false;
-  e.querySelector('.chk').onclick=ev=>{ev.stopPropagation();toggle(t,e)};
+  chk.onclick=ev=>{ev.stopPropagation();toggle(t,e)};
+  chk.onkeydown=ev=>{if(ev.key==='Delete'||ev.key==='Backspace'){ev.preventDefault();dismiss(e,t)}};
   row.onpointerdown=ev=>{if(ev.target.closest('.chk'))return;dn=true;mv=false;sx=ev.clientX;dx=0;row.style.transition='none'};
   row.onpointermove=ev=>{
     if(!dn)return;const x=ev.clientX-sx;
@@ -251,7 +296,7 @@ function li(t,i,mode){
   const end=cancel=>{
     if(!dn)return;dn=false;row.style.transition='';
     if(!mv){if(!cancel)toggle(t,e)}
-    else if(dx<-90&&!cancel){row.style.transform='translateX(-110%)';setTimeout(()=>remove(e,t.id),230)}
+    else if(dx<-90&&!cancel){dismiss(e,t)}
     else{row.style.transform='';del.style.opacity=0}};
   row.onpointerup=()=>end(false);row.onpointercancel=()=>end(true);
   return e}
@@ -267,18 +312,22 @@ function renderList(mode){
   r.forEach((t,i)=>ul.append(li(t,i,mode)))}
 function renderAll(go){renderHead();renderWeek();renderList(go?'stagger':'');stats();ensureWeek()}
 async function loadWeek(silent){
+  if(!sb||!user)return;
   const s=weekOf(sel),k=key(s);
   const {data,error}=await sb.from('tasks').select('id,day,title,time,color,done').gte('day',k).lte('day',key(addDays(s,6))).order('created_at');
-  for(let i=0;i<7;i++)cache[key(addDays(s,i))]=[];
-  if(error)toast('Could not load tasks. '+error.message);
-  else data.forEach(r=>cache[r.day].push({id:r.id,t:r.title,time:r.time||'',c:r.color,d:r.done}));
+  if(error){toast('Could not load tasks. '+error.message)}
+  else{
+    for(let i=0;i<7;i++)cache[key(addDays(s,i))]=[];
+    data.forEach(r=>{(cache[r.day]||(cache[r.day]=[])).push({id:r.id,t:r.title,time:r.time||'',c:r.color,d:r.done,k:r.day})});
+  }
   loaded.add(k);
   if(key(weekOf(sel))===k){renderWeek();renderList(silent?'':'stagger');stats()}}
 function ensureWeek(){
   const k=key(weekOf(sel));
   if(user&&!loaded.has(k)&&!pending.has(k)){pending.add(k);loadWeek().finally(()=>pending.delete(k))}}
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&user)loadWeek(true)});
-function setSeg(){$('#seg').style.setProperty('--f',filter);document.querySelectorAll('#seg button').forEach((b,i)=>b.classList.toggle('on',i==filter))}
+function setSeg(){
+  $('#seg').style.setProperty('--f',filter);
+  document.querySelectorAll('#seg button').forEach((b,i)=>{b.classList.toggle('on',i==filter);b.setAttribute('aria-pressed',i==filter)})}
 document.querySelectorAll('#seg button').forEach((b,i)=>b.onclick=()=>{if(filter==i)return;filter=i;setSeg();renderList('stagger')});
 $('#prev').onclick=()=>{sel.setDate(sel.getDate()-7);renderAll(1)};
 $('#next').onclick=()=>{sel.setDate(sel.getDate()+7);renderAll(1)};
@@ -286,48 +335,118 @@ $('#go').onclick=()=>{sel=new Date(today);renderAll(1)};
 addEventListener('scroll',()=>$('#nav').classList.toggle('on',scrollY>56),{passive:true});
 
 ['blue','green','orange','pink','purple'].forEach(c=>{
-  const b=document.createElement('button');b.className='c-'+c+(c==color?' on':'');b.setAttribute('aria-label',c);
-  b.onclick=()=>{color=c;document.querySelectorAll('#sw button').forEach(x=>x.classList.toggle('on',x==b))};
+  const b=document.createElement('button');b.type='button';b.className='c-'+c+(c==color?' on':'');
+  b.setAttribute('aria-label',c);b.setAttribute('aria-pressed',c==color);
+  b.onclick=()=>{color=c;document.querySelectorAll('#sw button').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-pressed',on)})};
   $('#sw').append(b)});
 function openSheet(){document.body.classList.add('open');$('#inp').value='';$('#time').value='';$('#add').disabled=true;setTimeout(()=>$('#inp').focus({preventScroll:true}),380)}
 function closeSheet(){document.body.classList.remove('open');$('#inp').blur()}
+const acct=o=>document.body.classList.toggle('acct',o);
 async function addTask(){
-  const v=$('#inp').value.trim();if(!v||$('#add').disabled)return;
+  const v=$('#inp').value.trim();
+  if(!v||$('#add').disabled||!sb||!user)return;
   $('#add').disabled=true;
-  const time=$('#time').value;
-  const {data,error}=await sb.from('tasks').insert({day:key(sel),title:v,time:time||null,color}).select('id').single();
+  // Capture the day now: the user may change days while the request is in flight.
+  const dk=key(sel),time=$('#time').value;
+  const {data,error}=await sb.from('tasks').insert({day:dk,title:v,time:time||null,color}).select('id').single();
   if(error){$('#add').disabled=false;return toast('Could not save. '+error.message)}
-  const t={id:data.id,t:v,time,c:color,d:false};
-  day().push(t);closeSheet();filter=0;setSeg();
-  renderList(t.id);stats();renderWeek()}
-$('#fab').onclick=openSheet;$('#scrim').onclick=()=>{closeSheet();acct(false)};$('#cancel').onclick=closeSheet;$('#add').onclick=addTask;
+  const t={id:data.id,t:v,time,c:color,d:false,k:dk};
+  (cache[dk]||(cache[dk]=[])).push(t);
+  closeSheet();filter=0;setSeg();
+  if(key(sel)===dk)renderList(t.id);
+  renderWeek();stats();
+}
+$('#fab').onclick=openSheet;
+$('#scrim').onclick=()=>{closeSheet();acct(false)};
+$('#cancel').onclick=closeSheet;
+$('#add').onclick=addTask;
 $('#inp').oninput=e=>$('#add').disabled=!e.target.value.trim();
 $('#inp').onkeydown=e=>{if(e.key==='Enter')addTask()};
 addEventListener('keydown',e=>{if(e.key==='Escape'){closeSheet();acct(false)}});
-let mode=0;
+
+// ---- Auth: sign in, create account, forgot password, and set a new password after a reset link ----
+let mode=0; // 0 sign in, 1 create account, 2 forgot password, 3 new password
+const MODES=[
+  {btn:'Sign in',sub:'Sign in to keep your plans in sync.'},
+  {btn:'Create account',sub:'Create an account to keep your plans in sync.'},
+  {btn:'Send reset link',sub:'We will email you a link to choose a new password.'},
+  {btn:'Save new password',sub:'Choose a new password for your account.'}];
 const msg=(m,ok)=>{const e=$('#msg');e.textContent=m;e.classList.toggle('ok',!!ok);if(m&&!ok){const f=$('#aform');f.classList.remove('shake');void f.offsetWidth;f.classList.add('shake')}};
-document.querySelectorAll('#aseg button').forEach((b,i)=>b.onclick=()=>{
-  mode=i;$('#aseg').style.setProperty('--f',i);
-  document.querySelectorAll('#aseg button').forEach((x,j)=>x.classList.toggle('on',j==i));
-  $('#abtn').textContent=i?'Create account':'Sign in';$('#pw').autocomplete=i?'new-password':'current-password';msg('')});
+function setMode(m){
+  mode=m;
+  const tabs=m<2,forgot=m===2,reset=m===3;
+  $('#aseg').hidden=!tabs;
+  if(tabs)$('#aseg').style.setProperty('--f',m);
+  document.querySelectorAll('#aseg button').forEach((b,j)=>{b.classList.toggle('on',j===m);b.setAttribute('aria-pressed',j===m)});
+  $('#em').hidden=reset;$('#em').required=!reset;
+  $('#pw').hidden=forgot;$('#pw').required=!forgot;
+  $('#pw').autocomplete=m===0?'current-password':'new-password';
+  if(m===0)$('#pw').removeAttribute('minlength');else $('#pw').setAttribute('minlength','8');
+  $('#pw').placeholder=m===0?'Password':'Password (8+ characters)';
+  $('#abtn').textContent=MODES[m].btn;$('#asub').textContent=MODES[m].sub;
+  $('#forgot').hidden=reset;$('#forgot').textContent=forgot?'Back to sign in':'Forgot password?';
+  msg('');
+}
+document.querySelectorAll('#aseg button').forEach((b,i)=>b.onclick=()=>setMode(i));
+$('#forgot').onclick=()=>setMode(mode===2?0:2);
 $('#aform').onsubmit=async e=>{
-  e.preventDefault();const b=$('#abtn');b.disabled=true;msg('');
+  e.preventDefault();
+  if(!sb)return;
+  const b=$('#abtn');b.disabled=true;msg('');
   const email=$('#em').value.trim(),password=$('#pw').value;
-  const {data,error}=mode?await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin}}):await sb.auth.signInWithPassword({email,password});
+  let res;
+  try{
+    res=mode===0?await sb.auth.signInWithPassword({email,password})
+      :mode===1?await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin}})
+      :mode===2?await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin})
+      :await sb.auth.updateUser({password});
+  }catch(err){res={error:err}}
   b.disabled=false;
-  if(error)msg(error.message);
-  else if(mode&&!data.session)msg('Check your email to confirm your account, then sign in.',1)};
-const acct=o=>document.body.classList.toggle('acct',o);
+  const {data,error}=res;
+  if(error)return msg(error.message);
+  if(mode===1&&data&&!data.session)msg('Check your email to confirm your account, then sign in.',1);
+  else if(mode===2)msg('If an account exists for that email, a reset link is on its way.',1);
+  else if(mode===3){
+    recovering=false;document.body.classList.remove('recovering');
+    $('#pw').value='';setMode(0);
+    const {data:{session}}=await sb.auth.getSession();
+    applySession(session?session.user:null);
+    toast('Password updated');
+  }
+};
+
+function applySession(u){
+  document.body.classList.remove('boot');
+  if(u&&(!user||user.id!==u.id)){
+    user=u;cache={};loaded.clear();pending.clear();filter=0;setSeg();
+    $('#who').textContent=u.email;document.body.classList.add('authed');renderAll(1);
+  }else if(!u&&user){
+    user=null;cache={};loaded.clear();pending.clear();$('#pw').value='';setMode(0);
+  }
+  document.body.classList.toggle('authed',!!user);
+}
+
 $('#me').onclick=()=>acct(true);$('#acx').onclick=()=>acct(false);
-$('#out').onclick=async()=>{acct(false);await sb.auth.signOut()};
-sb.auth.onAuthStateChange((ev,session)=>{
-  const u=session?session.user:null;
-  setTimeout(()=>{
-    document.body.classList.remove('boot');
-    if(u&&(!user||user.id!==u.id)){
-      user=u;cache={};loaded.clear();pending.clear();filter=0;setSeg();
-      $('#who').textContent=u.email;document.body.classList.add('authed');renderAll(1)}
-    else if(!u&&user){user=null;cache={};loaded.clear();pending.clear();document.body.classList.remove('authed');$('#pw').value=''}})});
+$('#out').onclick=async()=>{acct(false);if(sb)await sb.auth.signOut()};
+
+setMode(0);
+setSeg();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshToday();if(user)loadWeek(true)}});
+setInterval(refreshToday,60000);
+if(sb){
+  sb.auth.onAuthStateChange((ev,session)=>{
+    if(ev==='PASSWORD_RECOVERY'){
+      // Opened from a reset email: show the new-password form instead of the app.
+      recovering=true;document.body.classList.add('recovering');
+      setTimeout(()=>{document.body.classList.remove('boot');setMode(3)});
+      return;
+    }
+    setTimeout(()=>{if(recovering){document.body.classList.remove('boot');return}applySession(session?session.user:null)});
+  });
+}else{
+  document.body.classList.remove('boot');
+  msg('The app could not start. Check config.js and your connection.');
+}
 renderAll(1);
 </script>
 </body>

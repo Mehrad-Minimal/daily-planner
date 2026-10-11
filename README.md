@@ -10,10 +10,12 @@ A minimal, iOS-style daily planner with email sign-in. Each person's tasks are s
 - Add tasks with an optional time and a color
 - Tap to complete (animated checkmark and strike-through), swipe left to delete
 - All / To do / Done filter
-- Email and password accounts through Supabase Auth
+- Email and password accounts through Supabase Auth, with password reset by email
 - Tasks saved per user, with row-level security so nobody can read or change another person's data
 - Light and dark mode that follow the device setting
 - Reduced-motion support
+- Keyboard support: Enter or Space toggles a focused task, Delete removes it
+- The day rolls over automatically at midnight, even if the tab stays open
 
 ## How it works
 
@@ -23,7 +25,7 @@ The app is a static site with no build step. `public/index.html` contains the in
 | --- | --- |
 | App (HTML, CSS, JS) | `public/index.html` |
 | Supabase URL and publishable key | `public/config.js` |
-| Database schema and policies | `supabase/migrations/20261010000000_create_tasks.sql` |
+| Database schema and policies | `supabase/migrations/` (applied in filename order) |
 | Netlify settings | `netlify.toml` |
 
 Data model: one table, `public.tasks` (`id`, `user_id`, `day`, `title`, `time`, `color`, `done`, `created_at`). Row-level security allows an authenticated user to select, insert, update, and delete only rows where `user_id` matches their own `auth.uid()`.
@@ -34,12 +36,13 @@ The app loads one week of tasks at a time, updates the screen immediately when y
 
 - `config.js` contains the Supabase **publishable** key. It is designed to be public. Protection comes from the row-level security policies, so keep them enabled.
 - Never put a Supabase `service_role` or secret key in this repository or in browser code.
+- `netlify.toml` sets a Content-Security-Policy that allows scripts only from the jsDelivr CDN and connections only to Supabase, plus framing protection.
 
 ## Set up your own copy
 
-1. **Create a Supabase project** and run `supabase/migrations/20261010000000_create_tasks.sql` in the SQL editor.
+1. **Create a Supabase project** and run the files in `supabase/migrations/` in the SQL editor, in filename order.
 2. **Update `public/config.js`** with your project URL and publishable key (Project Settings, API Keys).
-3. **Configure auth redirects.** In Supabase, open Authentication, URL Configuration, set the Site URL to your deployed address, and add it to the redirect URLs. This makes the confirmation link in sign-up emails land on your site. If you prefer no confirmation emails, turn off "Confirm email" under Authentication, Providers, Email.
+3. **Configure auth redirects.** In Supabase, open Authentication, URL Configuration, set the Site URL to your deployed address, and add it to the redirect URLs. This makes the confirmation link in sign-up emails and the password reset link land on your site. If you prefer no confirmation emails, turn off "Confirm email" under Authentication, Providers, Email.
 4. **Run locally** with any static server, for example `npx serve public`.
 
 ## Deploy to Netlify
@@ -58,5 +61,5 @@ If you link a site with the CLI, keep `.netlify` out of git. It is already in `.
 ## Notes and limits
 
 - Supabase's built-in email sender is rate-limited and meant for testing. For real use, connect your own SMTP provider.
-- Passwords need at least 8 characters in this app's form.
-- Tasks are not shared between accounts, and there is no password reset screen yet.
+- Passwords need at least 8 characters when you create an account or reset a password.
+- Tasks are not shared between accounts. Tasks can be checked off or deleted but not edited yet; delete and re-add one to change it.
