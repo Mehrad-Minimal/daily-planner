@@ -2,7 +2,7 @@
   publish = "public"
 
 [build.environment]
-  # config.js holds only the public Supabase URL and publishable key.
+  # config.js holds only the public Firebase web config, which is safe to ship.
   SECRETS_SCAN_OMIT_PATHS = "config.js"
 
 [[headers]]
@@ -12,4 +12,4 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     X-Frame-Options = "DENY"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.googleapis.com wss://*.googleapis.com; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
