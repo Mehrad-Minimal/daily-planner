@@ -6,8 +6,6 @@
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="A minimal, iOS-style daily planner.">
 <title>Daily Planner</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
-<script src="config.js"></script>
 <style>
 :root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f2f2f7;--card:#fff;--lab:#000;--lab2:rgba(60,60,67,.6);--sep:rgba(60,60,67,.18);--fill:rgba(118,118,128,.12);--thumb:#fff;--blue:#007aff;--green:#34c759;--orange:#ff9500;--pink:#ff2d55;--purple:#af52de;--red:#ff3b30;--sh:0 1px 2px rgba(0,0,0,.04),0 6px 18px rgba(0,0,0,.04)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--card:#1c1c1e;--lab:#fff;--lab2:rgba(235,235,245,.6);--sep:rgba(84,84,88,.6);--fill:rgba(118,118,128,.24);--thumb:#636366;--blue:#0a84ff;--green:#30d158;--orange:#ff9f0a;--pink:#ff375f;--purple:#bf5af2;--red:#ff453a;--sh:none}}
@@ -106,8 +104,6 @@ input[type=time]{border:0;outline:0;background:var(--fill);color:inherit;font:in
 .sw button.on{transform:scale(1.18);box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--c)}
 body.boot .app,body.boot .fab,body.boot #auth,body:not(.authed) .app,body:not(.authed) .fab,body.authed #auth{display:none}
 [hidden]{display:none!important}
-body.recovering #auth{display:grid}
-body.recovering .app,body.recovering .fab{display:none}
 .link{display:block;margin:14px auto 0;color:var(--blue);font-size:15px;font-weight:500}
 #auth{min-height:100vh;display:grid;place-items:center;padding:24px 20px}
 .acard{width:100%;max-width:380px;text-align:center;animation:up .8s cubic-bezier(.2,.8,.2,1) backwards}
@@ -179,22 +175,34 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-o
 </div>
 <div class="sheet" id="acct" role="dialog" aria-label="Account"><div class="grab"></div><p class="who" id="who"></p><div class="grp"><button class="out-btn danger" id="out">Sign out</button></div><div class="grp"><button class="out-btn" id="acx" style="color:var(--blue)">Cancel</button></div></div>
 <div class="toast" id="toast"></div>
-<script>
+<script type="module">
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,sendEmailVerification,sendPasswordResetEmail,signOut} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import {getFirestore,collection,doc,query,where,onSnapshot,setDoc,updateDoc,deleteDoc} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import {firebaseConfig} from './config.js';
+
 const $=s=>document.querySelector(s),C=163.36;
-const configured=typeof SUPABASE_URL!=='undefined'&&typeof SUPABASE_KEY!=='undefined'&&typeof supabase!=='undefined';
-const sb=configured?supabase.createClient(SUPABASE_URL,SUPABASE_KEY):null;
-let user=null,cache={},loaded=new Set(),pending=new Set(),recovering=false;
+const configured=!Object.values(firebaseConfig).some(v=>String(v).startsWith('YOUR_'));
+const app=configured?initializeApp(firebaseConfig):null;
+const auth=app?getAuth(app):null;
+const db=app?getFirestore(app):null;
+
+let user=null,cache={},weekReady=false,listenKey=null,unsubscribe=null,justAdded='';
+let today=startOfDay();
+let sel=new Date(today),filter=0,color='blue',wk='';
+
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('on'),3200)};
 const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
 const weekOf=d=>addDays(d,-((d.getDay()+6)%7));
 const key=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-const startOfDay=()=>{const d=new Date();d.setHours(0,0,0,0);return d};
-let today=startOfDay();
-let sel=new Date(today),filter=0,color='blue',wk='';
+function startOfDay(){const d=new Date();d.setHours(0,0,0,0);return d}
 const day=()=>cache[key(sel)]||(cache[key(sel)]=[]);
 const fmt=t=>{const[h,m]=t.split(':'),H=+h;return(H%12||12)+':'+m+' '+(H<12?'AM':'PM')};
+const tasksRef=()=>collection(db,'users',user.uid,'tasks');
+const taskDoc=id=>doc(db,'users',user.uid,'tasks',id);
+const sigOf=c=>JSON.stringify(Object.keys(c).sort().map(k=>(c[k]||[]).map(x=>[x.id,x.t,x.time,x.c,x.d])));
 
-// Rolls the "Today" anchor forward when the calendar day changes (app left open overnight).
+// Keeps the "Today" anchor correct when the calendar day changes while the app is open.
 function refreshToday(){
   const now=startOfDay();
   if(key(now)===key(today))return;
@@ -261,20 +269,20 @@ function dismiss(e,t){
   e.querySelector('.del').style.opacity=1;
   setTimeout(()=>remove(e,t),230);
 }
+// Optimistic: the list updates now. Firestore queues the write while offline and reverts it if the server rejects it.
 function remove(e,t){
   cache[t.k]=(cache[t.k]||[]).filter(x=>x.id!==t.id);
-  sb.from('tasks').delete().eq('id',t.id).then(({error})=>{if(error){toast('Could not delete. '+error.message);loadWeek(true)}});
+  deleteDoc(taskDoc(t.id)).catch(err=>toast('Could not delete. '+err.message));
   stats();renderWeek();
   collapse(e,()=>{if(!$('#list li'))renderList()});
 }
 function toggle(t,e){
   t.d=!t.d;
-  const want=t.d;
-  sb.from('tasks').update({done:want}).eq('id',t.id).then(({error})=>{
-    if(error){t.d=!want;paint(e,t);stats();toast('Could not save. '+error.message)}});
+  updateDoc(taskDoc(t.id),{done:t.d}).catch(err=>toast('Could not save. '+err.message));
   const c=e.querySelector('.chk');c.classList.remove('tick');void c.offsetWidth;c.classList.add('tick');
   paint(e,t);stats();
   // In a filtered view, drop the row after the check animation, unless the user already changed it back.
+  const want=t.d;
   if(filter)setTimeout(()=>{if(t.d===want)collapse(e,()=>{if(!$('#list li'))renderList()})},520);
 }
 function li(t,i,mode){
@@ -302,7 +310,7 @@ function li(t,i,mode){
   return e}
 function renderList(mode){
   const ul=$('#list'),all=day();
-  if(!loaded.has(key(weekOf(sel)))){ul.innerHTML='<div class="sk"></div><div class="sk" style="opacity:.6"></div><div class="sk" style="opacity:.3"></div>';return}
+  if(!weekReady){ul.innerHTML='<div class="sk"></div><div class="sk" style="opacity:.6"></div><div class="sk" style="opacity:.3"></div>';return}
   const r=all.slice().sort((a,b)=>(a.time||'99').localeCompare(b.time||'99')).filter(t=>!filter||(filter==1?!t.d:t.d));
   ul.innerHTML='';
   if(!r.length){
@@ -310,21 +318,32 @@ function renderList(mode){
     e.innerHTML='<div class="ic">'+(all.length?'🌿':'☀️')+'</div><b>'+(all.length?'Nothing here':'A clear day')+'</b>'+(all.length?'Switch filters to see more':'Tap + to plan something');
     ul.append(e);return}
   r.forEach((t,i)=>ul.append(li(t,i,mode)))}
-function renderAll(go){renderHead();renderWeek();renderList(go?'stagger':'');stats();ensureWeek()}
-async function loadWeek(silent){
-  if(!sb||!user)return;
+
+// Live query for the visible week. Firestore pushes every change, including ones from other devices.
+function stopListening(){if(unsubscribe)unsubscribe();unsubscribe=null;listenKey=null;weekReady=false}
+function listenWeek(){
+  if(!user||!db)return;
   const s=weekOf(sel),k=key(s);
-  const {data,error}=await sb.from('tasks').select('id,day,title,time,color,done').gte('day',k).lte('day',key(addDays(s,6))).order('created_at');
-  if(error){toast('Could not load tasks. '+error.message)}
-  else{
-    for(let i=0;i<7;i++)cache[key(addDays(s,i))]=[];
-    data.forEach(r=>{(cache[r.day]||(cache[r.day]=[])).push({id:r.id,t:r.title,time:r.time||'',c:r.color,d:r.done,k:r.day})});
-  }
-  loaded.add(k);
-  if(key(weekOf(sel))===k){renderWeek();renderList(silent?'':'stagger');stats()}}
-function ensureWeek(){
-  const k=key(weekOf(sel));
-  if(user&&!loaded.has(k)&&!pending.has(k)){pending.add(k);loadWeek().finally(()=>pending.delete(k))}}
+  if(k===listenKey)return;
+  stopListening();
+  listenKey=k;
+  const q=query(tasksRef(),where('day','>=',k),where('day','<=',key(addDays(s,6))));
+  unsubscribe=onSnapshot(q,snap=>{
+    if(listenKey!==k)return;
+    const next={};
+    for(let i=0;i<7;i++)next[key(addDays(s,i))]=[];
+    snap.forEach(d=>{const r=d.data();(next[r.day]||(next[r.day]=[])).push({id:d.id,t:r.title,time:r.time||'',c:r.color,d:!!r.done,k:r.day})});
+    const first=!weekReady,changed=sigOf(cache)!==sigOf(next);
+    cache=next;weekReady=true;
+    // Skip the redraw when the screen already matches (for example, our own optimistic change echoing back).
+    if(!first&&!changed)return;
+    renderWeek();renderList(justAdded||(first?'stagger':''));justAdded='';stats();
+  },err=>{
+    toast('Could not load tasks. '+err.message);
+    listenKey=null;weekReady=true;renderList('');
+  });
+}
+function renderAll(go){listenWeek();renderHead();renderWeek();renderList(go?'stagger':'');stats()}
 function setSeg(){
   $('#seg').style.setProperty('--f',filter);
   document.querySelectorAll('#seg button').forEach((b,i)=>{b.classList.toggle('on',i==filter);b.setAttribute('aria-pressed',i==filter)})}
@@ -342,19 +361,21 @@ addEventListener('scroll',()=>$('#nav').classList.toggle('on',scrollY>56),{passi
 function openSheet(){document.body.classList.add('open');$('#inp').value='';$('#time').value='';$('#add').disabled=true;setTimeout(()=>$('#inp').focus({preventScroll:true}),380)}
 function closeSheet(){document.body.classList.remove('open');$('#inp').blur()}
 const acct=o=>document.body.classList.toggle('acct',o);
-async function addTask(){
+
+function addTask(){
   const v=$('#inp').value.trim();
-  if(!v||$('#add').disabled||!sb||!user)return;
+  if(!v||$('#add').disabled||!user)return;
   $('#add').disabled=true;
-  // Capture the day now: the user may change days while the request is in flight.
   const dk=key(sel),time=$('#time').value;
-  const {data,error}=await sb.from('tasks').insert({day:dk,title:v,time:time||null,color}).select('id').single();
-  if(error){$('#add').disabled=false;return toast('Could not save. '+error.message)}
-  const t={id:data.id,t:v,time,c:color,d:false,k:dk};
-  (cache[dk]||(cache[dk]=[])).push(t);
+  // Generate the id locally so the new row can be animated when the snapshot arrives.
+  const ref=doc(tasksRef());
+  justAdded=ref.id;
   closeSheet();filter=0;setSeg();
-  if(key(sel)===dk)renderList(t.id);
-  renderWeek();stats();
+  setDoc(ref,{title:v,day:dk,time:time||null,color,done:false}).catch(err=>{
+    justAdded='';
+    toast('Could not save. '+err.message);
+    openSheet();$('#inp').value=v;$('#time').value=time;$('#add').disabled=false;
+  });
 }
 $('#fab').onclick=openSheet;
 $('#scrim').onclick=()=>{closeSheet();acct(false)};
@@ -364,88 +385,84 @@ $('#inp').oninput=e=>$('#add').disabled=!e.target.value.trim();
 $('#inp').onkeydown=e=>{if(e.key==='Enter')addTask()};
 addEventListener('keydown',e=>{if(e.key==='Escape'){closeSheet();acct(false)}});
 
-// ---- Auth: sign in, create account, forgot password, and set a new password after a reset link ----
-let mode=0; // 0 sign in, 1 create account, 2 forgot password, 3 new password
+// ---- Auth: sign in, create account, or reset password ----
+let mode=0; // 0 sign in, 1 create account, 2 forgot password
 const MODES=[
   {btn:'Sign in',sub:'Sign in to keep your plans in sync.'},
   {btn:'Create account',sub:'Create an account to keep your plans in sync.'},
-  {btn:'Send reset link',sub:'We will email you a link to choose a new password.'},
-  {btn:'Save new password',sub:'Choose a new password for your account.'}];
+  {btn:'Send reset link',sub:'We will email you a link to choose a new password.'}];
 const msg=(m,ok)=>{const e=$('#msg');e.textContent=m;e.classList.toggle('ok',!!ok);if(m&&!ok){const f=$('#aform');f.classList.remove('shake');void f.offsetWidth;f.classList.add('shake')}};
+const friendly=err=>({
+  'auth/invalid-credential':'Email or password is incorrect.',
+  'auth/wrong-password':'Email or password is incorrect.',
+  'auth/user-not-found':'Email or password is incorrect.',
+  'auth/invalid-email':'Enter a valid email address.',
+  'auth/email-already-in-use':'An account with that email already exists.',
+  'auth/weak-password':'Password must be at least 8 characters.',
+  'auth/too-many-requests':'Too many attempts. Try again in a few minutes.',
+  'auth/network-request-failed':'Network error. Check your connection.'
+})[err.code]||err.message;
 function setMode(m){
   mode=m;
-  const tabs=m<2,forgot=m===2,reset=m===3;
-  $('#aseg').hidden=!tabs;
-  if(tabs)$('#aseg').style.setProperty('--f',m);
+  const forgot=m===2;
+  $('#aseg').hidden=forgot;
+  if(!forgot)$('#aseg').style.setProperty('--f',m);
   document.querySelectorAll('#aseg button').forEach((b,j)=>{b.classList.toggle('on',j===m);b.setAttribute('aria-pressed',j===m)});
-  $('#em').hidden=reset;$('#em').required=!reset;
   $('#pw').hidden=forgot;$('#pw').required=!forgot;
-  $('#pw').autocomplete=m===0?'current-password':'new-password';
-  if(m===0)$('#pw').removeAttribute('minlength');else $('#pw').setAttribute('minlength','8');
-  $('#pw').placeholder=m===0?'Password':'Password (8+ characters)';
+  $('#pw').autocomplete=m===1?'new-password':'current-password';
+  if(m===1)$('#pw').setAttribute('minlength','8');else $('#pw').removeAttribute('minlength');
+  $('#pw').placeholder=m===1?'Password (8+ characters)':'Password';
   $('#abtn').textContent=MODES[m].btn;$('#asub').textContent=MODES[m].sub;
-  $('#forgot').hidden=reset;$('#forgot').textContent=forgot?'Back to sign in':'Forgot password?';
+  $('#forgot').textContent=forgot?'Back to sign in':'Forgot password?';
   msg('');
 }
 document.querySelectorAll('#aseg button').forEach((b,i)=>b.onclick=()=>setMode(i));
 $('#forgot').onclick=()=>setMode(mode===2?0:2);
 $('#aform').onsubmit=async e=>{
   e.preventDefault();
-  if(!sb)return;
+  if(!auth)return;
   const b=$('#abtn');b.disabled=true;msg('');
   const email=$('#em').value.trim(),password=$('#pw').value;
-  let res;
   try{
-    res=mode===0?await sb.auth.signInWithPassword({email,password})
-      :mode===1?await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin}})
-      :mode===2?await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin})
-      :await sb.auth.updateUser({password});
-  }catch(err){res={error:err}}
-  b.disabled=false;
-  const {data,error}=res;
-  if(error)return msg(error.message);
-  if(mode===1&&data&&!data.session)msg('Check your email to confirm your account, then sign in.',1);
-  else if(mode===2)msg('If an account exists for that email, a reset link is on its way.',1);
-  else if(mode===3){
-    recovering=false;document.body.classList.remove('recovering');
-    $('#pw').value='';setMode(0);
-    const {data:{session}}=await sb.auth.getSession();
-    applySession(session?session.user:null);
-    toast('Password updated');
-  }
+    if(mode===0){
+      await signInWithEmailAndPassword(auth,email,password);
+    }else if(mode===1){
+      const cred=await createUserWithEmailAndPassword(auth,email,password);
+      sendEmailVerification(cred.user).catch(()=>{});
+      toast('Account created. Check your email to verify it.');
+    }else{
+      await sendPasswordResetEmail(auth,email);
+      msg('If an account exists for that email, a reset link is on its way.',1);
+    }
+  }catch(err){msg(friendly(err))}
+  finally{b.disabled=false}
 };
 
 function applySession(u){
   document.body.classList.remove('boot');
-  if(u&&(!user||user.id!==u.id)){
-    user=u;cache={};loaded.clear();pending.clear();filter=0;setSeg();
-    $('#who').textContent=u.email;document.body.classList.add('authed');renderAll(1);
+  if(u&&(!user||user.uid!==u.uid)){
+    stopListening();
+    user=u;cache={};filter=0;setSeg();
+    $('#who').textContent=u.email||'';document.body.classList.add('authed');renderAll(1);
   }else if(!u&&user){
-    user=null;cache={};loaded.clear();pending.clear();$('#pw').value='';setMode(0);
+    stopListening();
+    user=null;cache={};$('#list').innerHTML='';$('#pw').value='';setMode(0);
   }
   document.body.classList.toggle('authed',!!user);
 }
 
 $('#me').onclick=()=>acct(true);$('#acx').onclick=()=>acct(false);
-$('#out').onclick=async()=>{acct(false);if(sb)await sb.auth.signOut()};
+$('#out').onclick=async()=>{acct(false);if(auth)await signOut(auth)};
 
 setMode(0);
 setSeg();
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshToday();if(user)loadWeek(true)}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshToday()});
 setInterval(refreshToday,60000);
-if(sb){
-  sb.auth.onAuthStateChange((ev,session)=>{
-    if(ev==='PASSWORD_RECOVERY'){
-      // Opened from a reset email: show the new-password form instead of the app.
-      recovering=true;document.body.classList.add('recovering');
-      setTimeout(()=>{document.body.classList.remove('boot');setMode(3)});
-      return;
-    }
-    setTimeout(()=>{if(recovering){document.body.classList.remove('boot');return}applySession(session?session.user:null)});
-  });
+if(configured){
+  onAuthStateChanged(auth,applySession);
 }else{
   document.body.classList.remove('boot');
-  msg('The app could not start. Check config.js and your connection.');
+  msg('Firebase is not set up yet. Add your project values to public/config.js.');
 }
 renderAll(1);
 </script>
